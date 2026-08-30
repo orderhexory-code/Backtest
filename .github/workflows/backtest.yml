@@ -25,38 +25,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy
 
-      - name: Find input CSV
+      - name: Find real CSV
+        shell: bash
         run: |
-          echo "CSV files found:"
+          echo "All CSV files:"
           find data -type f -name "*.csv" -print
 
-      - name: Run backtest
-        run: |
-          CSV_FILE=$(find data -type f -name "*.csv" | head -n 1)
+          CSV_FILE=$(find data -type f -name "*.csv" \
+            ! -name "YOUR-1-DAY-CSV.csv" \
+            | head -n 1)
 
           if [ -z "$CSV_FILE" ]; then
-            echo "ERROR: No CSV file found."
+            echo "ERROR: No real CSV file found."
             exit 1
           fi
 
+          echo ""
           echo "Using CSV:"
           echo "$CSV_FILE"
 
+          echo ""
+          echo "CSV header:"
+          head -n 2 "$CSV_FILE"
+
+          echo "CSV_FILE=$CSV_FILE" >> "$GITHUB_ENV"
+
+      - name: Run backtest
+        run: |
           python scripts/backtest.py \
             "$CSV_FILE" \
             --output backtest.html
 
       - name: Verify HTML
         run: |
-          if [ ! -f backtest.html ]; then
-            echo "ERROR: backtest.html was not created."
-            exit 1
-          fi
+          test -s backtest.html
 
-          echo "HTML created successfully:"
+          echo "Backtest dashboard created:"
           ls -lh backtest.html
 
-      - name: Commit HTML dashboard
+      - name: Commit dashboard
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -64,7 +71,7 @@ jobs:
           git add backtest.html
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No dashboard changes."
           else
             git commit -m "backtest: generate US100 pullback dashboard"
             git push
