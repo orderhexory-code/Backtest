@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - "*.zip"
+      - "**/*.zip"
   workflow_dispatch:
 
 permissions:
@@ -18,38 +19,60 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Extract every zip in repo root and flatten (no wrapper folder)
+      - name: Recursively extract every zip (including nested zips) and flatten
         run: |
           set -e
           shopt -s nullglob
-          zips=(*.zip)
 
-          if [ ${#zips[@]} -eq 0 ]; then
-            echo "No .zip files found in repo root - nothing to do."
-            exit 0
-          fi
+          extract_one() {
+            local zip="$1"
+            local destdir
+            destdir="$(dirname "$zip")"
+            echo "=== Extracting $zip into $destdir ==="
 
-          for zip in "${zips[@]}"; do
-            echo "=== Extracting $zip ==="
+            local tmpdir
             tmpdir="$(mktemp -d)"
             unzip -q "$zip" -d "$tmpdir"
 
-            # Count top-level entries inside the extracted zip
-            entries=("$tmpdir"/*)
+            local entries=("$tmpdir"/*)
 
             if [ ${#entries[@]} -eq 1 ] && [ -d "${entries[0]}" ]; then
-              # Zip contained a single wrapper folder -> pull its CONTENTS
-              # straight into repo root, discarding the wrapper.
-              echo "Single wrapper folder detected: $(basename "${entries[0]}") -> flattening"
-              cp -a "${entries[0]}/." ./
+              # Single wrapper folder -> pull its CONTENTS into destdir, discard wrapper
+              echo "Single wrapper folder detected: $(basename "${entries[0]}") -> flattening into $destdir"
+              cp -a "${entries[0]}/." "$destdir/"
             else
-              # Zip already had files/folders at top level -> copy as-is.
-              cp -a "$tmpdir/." ./
+              # Multiple top-level entries -> copy as-is into destdir
+              cp -a "$tmpdir/." "$destdir/"
             fi
 
             rm -rf "$tmpdir"
             rm -f "$zip"
             echo "=== Done with $zip ==="
+          }
+
+          round=1
+          while true; do
+            # Find ALL zip files anywhere in the repo (root + any nested folder),
+            # excluding .git directory
+            mapfile -t zips < <(find . -path ./.git -prune -o -type f -iname "*.zip" -print)
+
+            if [ ${#zips[@]} -eq 0 ]; then
+              echo "No more .zip files found (round $round) - extraction complete."
+              break
+            fi
+
+            echo "--- Round $round: found ${#zips[@]} zip(s) ---"
+            for zip in "${zips[@]}"; do
+              extract_one "$zip"
+            done
+
+            round=$((round + 1))
+
+            # Safety valve to avoid infinite loop in weird edge cases
+            if [ "$round" -gt 20 ]; then
+              echo "Too many extraction rounds, stopping to avoid infinite loop."
+              break
+            fi
           done
 
       - name: Commit extracted files back to repo
@@ -63,6 +86,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing changed - skipping commit."
           else
-            git commit -m "Auto-extract and flatten uploaded zip [skip ci]"
+            git commit -m "Auto-extract and flatten uploaded zip(s), including nested [skip ci]"
             git push
           fi
