@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "============================================================"
-echo " Starting US100 M1 Scalping Backtest Runner"
-echo "============================================================"
+echo "==> Running US100 M1 Scalper Backtest Engine"
 
 CSV_FILE="${1:-}"
 
-# Auto-discovery if CSV_FILE is not explicitly passed
 if [ -z "$CSV_FILE" ]; then
-    echo "[INFO] No CSV path argument supplied. Searching standard data directories..."
     if [ -d "data" ]; then
-        # Find real CSV file (exclude empty or placeholder files)
         FOUND_CSV=$(find data -maxdepth 3 -type f -name "*.csv" -size +1k | head -n 1 || true)
         if [ -n "$FOUND_CSV" ]; then
             CSV_FILE="$FOUND_CSV"
@@ -19,20 +14,13 @@ if [ -z "$CSV_FILE" ]; then
     fi
 fi
 
-if [ -z "$CSV_FILE" ]; then
-    echo "[ERROR] No valid CSV file located. Please specify path: ./scripts/run.sh <path_to_csv>"
+if [ -z "$CSV_FILE" ] || [ ! -f "$CSV_FILE" ]; then
+    echo "[ERROR] No valid CSV dataset found: $CSV_FILE"
     exit 1
 fi
 
-if [ ! -f "$CSV_FILE" ]; then
-    echo "[ERROR] Specified CSV file does not exist: $CSV_FILE"
-    exit 1
-fi
+echo "[INFO] Running backtest with CSV: $CSV_FILE"
 
-echo "[INFO] Target dataset: $CSV_FILE"
-echo "[INFO] File size: $(ls -lh "$CSV_FILE" | awk '{print $5}')"
-
-# Run python backtest engine
 python3 scripts/backtest.py \
     --csv "$CSV_FILE" \
     --initial-balance 10000.0 \
@@ -41,32 +29,17 @@ python3 scripts/backtest.py \
     --spread 1.0 \
     --slippage 0.5 \
     --commission 0.0 \
+    --enable-c2c \
+    --c2c-trigger-r 1.0 \
     --output-dir results \
     --html-output backtest.html
 
-# Verify output artifacts exist and are non-empty
-echo "[INFO] Verifying generated artifacts..."
+# Copy to index.html for instant GitHub Pages compatibility
+cp backtest.html index.html
 
-if [ ! -f "results/trades.csv" ]; then
-    echo "[ERROR] results/trades.csv was not generated!"
-    exit 1
-fi
+test -s results/trades.csv || { echo "[ERROR] trades.csv missing"; exit 1; }
+test -s results/statistics.json || { echo "[ERROR] statistics.json missing"; exit 1; }
+test -s results/audit.csv || { echo "[ERROR] audit.csv missing"; exit 1; }
+test -s backtest.html || { echo "[ERROR] backtest.html missing"; exit 1; }
 
-if [ ! -f "results/statistics.json" ]; then
-    echo "[ERROR] results/statistics.json was not generated!"
-    exit 1
-fi
-
-if [ ! -f "results/audit.csv" ]; then
-    echo "[ERROR] results/audit.csv was not generated!"
-    exit 1
-fi
-
-if [ ! -f "backtest.html" ]; then
-    echo "[ERROR] backtest.html was not generated!"
-    exit 1
-fi
-
-echo "============================================================"
-echo " Backtest completed successfully. All artifacts validated."
-echo "============================================================"
+echo "==> Verification completed successfully. Artifacts ready."
