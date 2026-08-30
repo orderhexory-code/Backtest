@@ -1,0 +1,68 @@
+name: Unzip and Flatten Upload
+on:
+  push:
+    paths:
+      - "*.zip"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Extract every zip in repo root and flatten (no wrapper folder)
+        run: |
+          set -e
+          shopt -s nullglob
+          zips=(*.zip)
+
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "No .zip files found in repo root - nothing to do."
+            exit 0
+          fi
+
+          for zip in "${zips[@]}"; do
+            echo "=== Extracting $zip ==="
+            tmpdir="$(mktemp -d)"
+            unzip -q "$zip" -d "$tmpdir"
+
+            # Count top-level entries inside the extracted zip
+            entries=("$tmpdir"/*)
+
+            if [ ${#entries[@]} -eq 1 ] && [ -d "${entries[0]}" ]; then
+              # Zip contained a single wrapper folder -> pull its CONTENTS
+              # straight into repo root, discarding the wrapper.
+              echo "Single wrapper folder detected: $(basename "${entries[0]}") -> flattening"
+              cp -a "${entries[0]}/." ./
+            else
+              # Zip already had files/folders at top level -> copy as-is.
+              cp -a "$tmpdir/." ./
+            fi
+
+            rm -rf "$tmpdir"
+            rm -f "$zip"
+            echo "=== Done with $zip ==="
+          done
+
+      - name: Commit extracted files back to repo
+        env:
+          PUSH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "extract-bot"
+          git config user.email "extract-bot@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing changed - skipping commit."
+          else
+            git commit -m "Auto-extract and flatten uploaded zip [skip ci]"
+            git push
+          fi
