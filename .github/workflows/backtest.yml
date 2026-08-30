@@ -1,78 +1,96 @@
-name: US100 Pullback Backtest
+name: US100 M1 Scalping Backtester
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
+    inputs:
+      csv_file:
+        description: 'Path to M1 CSV file (e.g. data/us100/2024.csv)'
+        required: false
+        default: 'data/us100/2024.csv'
+      risk_reward:
+        description: 'Risk-to-Reward Ratio (e.g. 2.0)'
+        required: false
+        default: '2.0'
+      spread_points:
+        description: 'Spread in Index Points (e.g. 1.0)'
+        required: false
+        default: '1.0'
+      slippage_points:
+        description: 'Slippage in Index Points (e.g. 0.5)'
+        required: false
+        default: '0.5'
 
 jobs:
-  backtest:
+  run-backtest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy
+          pip install -r scripts/requirements.txt
 
-      - name: Find real CSV
-        shell: bash
+      - name: Locate and Validate CSV Dataset
+        id: locate_csv
         run: |
-          echo "All CSV files:"
-          find data -type f -name "*.csv" -print
-
-          CSV_FILE=$(find data -type f -name "*.csv" \
-            ! -name "YOUR-1-DAY-CSV.csv" \
-            | head -n 1)
-
-          if [ -z "$CSV_FILE" ]; then
-            echo "ERROR: No real CSV file found."
+          TARGET_CSV="${{ github.event.inputs.csv_file }}"
+          if [ -z "$TARGET_CSV" ] || [ ! -f "$TARGET_CSV" ]; then
+            echo "[WARN] Specified input '$TARGET_CSV' not found. Searching repository..."
+            TARGET_CSV=$(find . -type f -name "*.csv" -not -path "*/results/*" -not -path "*/.*" -size +1k | head -n 1 || true)
+          fi
+          
+          if [ -z "$TARGET_CSV" ] || [ ! -f "$TARGET_CSV" ]; then
+            echo "[ERROR] No valid CSV dataset could be located in repository."
             exit 1
           fi
+          
+          echo "SELECTED_CSV=$TARGET_CSV" >> $GITHUB_ENV
+          echo "Selected CSV: $TARGET_CSV"
 
-          echo ""
-          echo "Using CSV:"
-          echo "$CSV_FILE"
+      - name: Make Scripts Executable
+        run: |
+          chmod +x scripts/run.sh
+          chmod +x scripts/backtest.py
 
-          echo ""
-          echo "CSV header:"
-          head -n 2 "$CSV_FILE"
-
-          echo "CSV_FILE=$CSV_FILE" >> "$GITHUB_ENV"
-
-      - name: Run backtest
+      - name: Execute Backtest
         run: |
           python scripts/backtest.py \
-            "$CSV_FILE" \
-            --output backtest.html
+            --csv "${{ env.SELECTED_CSV }}" \
+            --risk-reward "${{ github.event.inputs.risk_reward || '2.0' }}" \
+            --spread "${{ github.event.inputs.spread_points || '1.0' }}" \
+            --slippage "${{ github.event.inputs.slippage_points || '0.5' }}" \
+            --output-dir results \
+            --html-output backtest.html
 
-      - name: Verify HTML
+      - name: Validate Output Integrity
         run: |
-          test -s backtest.html
+          test -s results/trades.csv || { echo "trades.csv missing or empty"; exit 1; }
+          test -s results/statistics.json || { echo "statistics.json missing or empty"; exit 1; }
+          test -s results/audit.csv || { echo "audit.csv missing or empty"; exit 1; }
+          test -s backtest.html || { echo "backtest.html missing or empty"; exit 1; }
+          echo "All validation assertions passed."
 
-          echo "Backtest dashboard created:"
-          ls -lh backtest.html
-
-      - name: Commit dashboard
+      - name: Commit and Push Results Directly to Repository
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add backtest.html
-
-          if git diff --cached --quiet; then
-            echo "No dashboard changes."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add results/trades.csv results/statistics.json results/audit.csv backtest.html
+          
+          if git diff --staged --quiet; then
+            echo "No changes detected in backtest results."
           else
-            git commit -m "backtest: generate US100 pullback dashboard"
+            git commit -m "Auto: Update US100 M1 backtest results [skip ci]"
             git push
           fi
